@@ -6,7 +6,8 @@ Command line argument should be either 'gpt-4' or 'gpt-35-turbo'
 
 from kg_rag.utility import *
 import sys
-
+import os
+import json
 
 from tqdm import tqdm
 CHAT_MODEL_ID = sys.argv[1]
@@ -35,18 +36,41 @@ node_context_df = pd.read_csv(NODE_CONTEXT_PATH)
 edge_evidence = False
 
 
-MODE = "0"
+MODE = "3"
 ### MODE 0: Original KG_RAG                     ### 
 ### MODE 1: jsonlize the context from KG search ### 
 ### MODE 2: Add the prior domain knowledge      ### 
 ### MODE 3: Combine MODE 1 & 2                  ### 
 
+PRIOR_KNOWLEDGE = [
+    "Phenotype-level descriptions (symptoms, clinical presentation) rarely help.",
+    "Diseases with similar etiologies tend to share genetic loci.",
+    "HLA-region variants are extremely common for immune or autoimmune phenotypes.",
+    "Cancer-related questions strongly favor oncogenes or tumor suppressors.",
+    "Variants with strong prior GWAS signals (rs) cluster across related conditions.",
+    "Certain genes are “multi-disease hubs.",
+    "Gene naming patterns often reflect functional families.",
+    "For variant questions, coding variants or missense SNPs are more likely to be directly implicated than intergenic ones."
+    "For pairwise variant associations (A x B), HLA combinations dominate in autoimmune diseases.",
+    "Tests mentioning \"limited scleroderma,\" \"rheumatoid arthritis,\" \"autoimmune vasculitis,\" etc., usually map to known immune pathways."
+]
+
 def main():
     start_time = time.time()
     question_df = pd.read_csv(QUESTION_PATH)
-    answer_list = []
-    
+
+    # Load cached model responses
+    cache_path = f"{SAVE_PATH}/{MODE}_intermediate.jsonl"
+    if os.path.exists(cache_path):
+        answer_list = [json.loads(line) for line in open(cache_path, 'r')]
+    else:
+        answer_list = []
+    print(f"Cached responses: {len(answer_list)}")
+
     for index, row in tqdm(question_df.iterrows(), total=306):
+        # Skipped cached quetions
+        if index < len(answer_list):
+            continue
         try: 
             question = row["text"]
             if MODE == "0":
@@ -58,19 +82,42 @@ def main():
             if MODE == "1":
                 ### MODE 1: jsonlize the context from KG search ### 
                 ### Please implement the first strategy here    ###
-                output = '...'
+                context = retrieve_context(row["text"], vectorstore, embedding_function_for_context_retrieval, node_context_df, CONTEXT_VOLUME, QUESTION_VS_CONTEXT_SIMILARITY_PERCENTILE_THRESHOLD, QUESTION_VS_CONTEXT_MINIMUM_SIMILARITY, edge_evidence, model_id=CHAT_MODEL_ID)
+                jsonlized_context = context_jsonlizer(context, CHAT_MODEL_ID)
+                if jsonlized_context is not None:
+                    enriched_prompt = "Context:\n"+ jsonlized_context + "\n" + "Question: "+ question
+                else:
+                    enriched_prompt = "Context:\n"+ context + "\n" + "Question: "+ question
+                output = get_Gemini_response(enriched_prompt, SYSTEM_PROMPT, temperature=TEMPERATURE)
 
             if MODE == "2":
                 ### MODE 2: Add the prior domain knowledge      ### 
                 ### Please implement the second strategy here   ###
-                output = '...'
+                context = retrieve_context(row["text"], vectorstore, embedding_function_for_context_retrieval, node_context_df, CONTEXT_VOLUME, QUESTION_VS_CONTEXT_SIMILARITY_PERCENTILE_THRESHOLD, QUESTION_VS_CONTEXT_MINIMUM_SIMILARITY, edge_evidence, model_id=CHAT_MODEL_ID)
+                for prior_knowledge in PRIOR_KNOWLEDGE:
+                    context += "\n" + f"- {prior_knowledge}" 
+                enriched_prompt = "Context: "+ context + "\n" + "Question: "+ question
+                output = get_Gemini_response(enriched_prompt, SYSTEM_PROMPT, temperature=TEMPERATURE)
             
             if MODE == "3":
                 ### MODE 3: Combine MODE 1 & 2                  ### 
                 ### Please implement the third strategy here    ###
-                output = '...'
+                context = retrieve_context(row["text"], vectorstore, embedding_function_for_context_retrieval, node_context_df, CONTEXT_VOLUME, QUESTION_VS_CONTEXT_SIMILARITY_PERCENTILE_THRESHOLD, QUESTION_VS_CONTEXT_MINIMUM_SIMILARITY, edge_evidence, model_id=CHAT_MODEL_ID)
+                jsonlized_context = context_jsonlizer(context, CHAT_MODEL_ID)
+                if jsonlized_context is not None:
+                    for prior_knowledge in PRIOR_KNOWLEDGE:
+                        jsonlized_context += "\n" + f"- {prior_knowledge}" 
+                    enriched_prompt = "Context:\n"+ jsonlized_context + "\n" + "Question: "+ question
+                else:
+                    for prior_knowledge in PRIOR_KNOWLEDGE:
+                        context += "\n" + f"- {prior_knowledge}"
+                    enriched_prompt = "Context:\n"+ context + "\n" + "Question: "+ question
+                output = get_Gemini_response(enriched_prompt, SYSTEM_PROMPT, temperature=TEMPERATURE)
 
             answer_list.append((row["text"], row["correct_node"], output))
+            # Cache previous gpt response to prevent API errors
+            with open(f"{SAVE_PATH}/{MODE}_intermediate.jsonl", 'a') as file:
+                file.write(json.dumps(answer_list[-1]) + "\n")
         except Exception as e:
             print("Error in processing question: ", row["text"])
             print("Error: ", e)

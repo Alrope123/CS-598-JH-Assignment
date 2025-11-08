@@ -1,4 +1,8 @@
 ---
+# Jsonlize the Context From KG Search
+JSONLIZE_CONTEXT: |
+  You are an expert in organizing a knowledge graph triple list and constructing a JSON structure from it. Please only report your constructed JSON.
+
 # Disease Entity Extraction
 DISEASE_ENTITY_EXTRACTION: |
   You are an expert disease entity extractor from a sentence and report it as JSON in the following format:

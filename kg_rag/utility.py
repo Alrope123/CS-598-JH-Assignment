@@ -292,7 +292,21 @@ def disease_entity_extractor_v2(text, model_id):
         return entity_dict["Diseases"]
     except:
         return None
-    
+
+def context_jsonlizer(text, model_id):
+    assert model_id in ("gemini-2.0-flash")
+    prompt_updated = system_prompts["JSONLIZE_CONTEXT"] + "\n" + "Knowledge graph triple list : " + text + "\n\n" + "Output JSON: "
+    resp = get_Gemini_response(prompt_updated, system_prompts["JSONLIZE_CONTEXT"], temperature=0.0)
+    resp = resp.strip()
+    if resp.startswith("```json\n"):
+        resp = resp.replace("```json\n", "", 1)
+    if resp.endswith("\n```"):
+        resp = resp.replace("\n```", "", -1)
+    try:
+        entity_dict = json.loads(resp)
+        return resp
+    except:
+        return None
 
 def load_sentence_transformer(sentence_embedding_model):
     return SentenceTransformerEmbeddings(model_name=sentence_embedding_model)
